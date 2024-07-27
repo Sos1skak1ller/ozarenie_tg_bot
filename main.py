@@ -60,6 +60,37 @@ async def cmd_start(message: types.Message):
             # Пользователь не найден в базе данных
             await message.answer("Тебя нет в базе данных.")
 
+# Обработчик команды /me
+@dp.message(Command("me"))
+async def cmd_me(message: types.Message):
+    telegram_nick = message.from_user.username
+
+    async with async_session() as session:
+        # Найти пользователя по telegram_nick
+        result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
+        user = result.scalars().first()
+
+        if user:
+            # Найти всех пользователей, которых он пригласил
+            invitees_result = await session.execute(select(User).where(User.inviter == telegram_nick))
+            invitees = invitees_result.scalars().all()
+            invitees_list = "\n".join([invitee.telegram_nick for invitee in invitees]) or "Нет приглашенных пользователей"
+
+            # Формируем сообщение
+            user_info = (
+                f"{user.full_name}\n"
+                f"Уровень: {user.level}\n"
+                f"Количество посещений: {user.visit_count}\n"
+                f"Количество приглашений: {user.invitation_count}\n"
+                f"Доступно приглашений: {user.available_invitations if user.available_invitations is not None else 'Нет данных'}\n"
+                f"Вас пригласил: {user.inviter if user.inviter else 'Никто'}\n"
+                f"Вы пригласили:\n{invitees_list}"
+            )
+            await message.answer(user_info)
+        else:
+            # Пользователь не найден в базе данных
+            await message.answer("Тебя нет в базе данных.")
+
 async def main():
     await dp.start_polling(bot)
 
