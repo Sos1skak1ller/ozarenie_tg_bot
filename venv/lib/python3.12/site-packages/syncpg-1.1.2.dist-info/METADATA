@@ -1,0 +1,33 @@
+Metadata-Version: 2.1
+Name: syncpg
+Version: 1.1.2
+Summary: synchronous wrapper for asyncpg
+Home-page: https://github.com/iomintz/syncpg
+Author: iomintz
+Author-email: io@mintz.cc
+License: BlueOak-1.0.0
+Platform: UNKNOWN
+Classifier: Topic :: Software Development
+Classifier: Topic :: Database :: Front-Ends
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.5
+Classifier: Programming Language :: Python :: 3.6
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Description-Content-Type: text/markdown
+Requires-Dist: asyncpg (<1.0.0,>=0.20.1)
+
+# syncpg
+
+A synchronous wrapper for [asyncpg](https://pypi.org/project/asyncpg/).
+
+It has the exact same API as asyncpg except wihtout functionality that only makes sense in an asynchronous context.
+Currently this means connection pools and any kind of listeners.
+See the asyncpg docs for usage.
+
+## License
+
+BlueOak Model License 1.0.0. See LICENSE.md or <https://blueoakcouncil.org/license/1.0.0>.
+
+
