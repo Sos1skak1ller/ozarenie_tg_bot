@@ -1,10 +1,12 @@
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.storage.memory import MemoryStorage
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.future import select
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy import Column, Integer, String
 
 # Настройки
@@ -13,7 +15,7 @@ DATABASE_URL = "postgresql+asyncpg://postgres:pass@localhost:5432/ozarenie_test_
 
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 
 # Настройка базы данных
 Base = declarative_base()
@@ -42,6 +44,10 @@ LEVEL_MESSAGES = {
     3: "Привет, мастер!"
 }
 
+# Определение состояний для FSM
+class InviteState(StatesGroup):
+    waiting_for_invite_nickname = State()
+
 # Обработчик команды /start
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -59,21 +65,6 @@ async def cmd_start(message: types.Message):
         else:
             # Пользователь не найден в базе данных
             await message.answer("Тебя нет в базе данных.")
-
-# Обработчик команды /level
-@dp.message(Command("level"))
-async def cmd_level(message: types.Message):
-    answer = (
-        "Существует три уровня участника. Уровень повышается засчет посещения наших мероприятий. "
-        "На каждом уровне доступно ограниченное количество приглашений (они обновляются каждое мероприятие).\n\n"
-        "1 посещение - 1й уровень - 1 приглашение\n"
-        "3 посещения - 2й уровень - 2 приглашения\n"
-        "5 посещений - 3й уровень - 3 приглашения\n\n"
-        "Вы можете использовать свои приглашения, чтобы пригласить на мероприятие своих друзей, не являющихся участниками нашего общества. "
-        "После этого они также будут внесены в список наших участников."
-    )
-    await message.answer(answer)
-
 
 # Обработчик команды /me
 @dp.message(Command("me"))
@@ -93,7 +84,7 @@ async def cmd_me(message: types.Message):
 
             # Формируем сообщение
             user_info = (
-                f"{user.full_name}\n"
+                f"Имя пользователя: {user.full_name}\n"
                 f"Уровень: {user.level}\n"
                 f"Количество посещений: {user.visit_count}\n"
                 f"Количество приглашений: {user.invitation_count}\n"
@@ -105,6 +96,99 @@ async def cmd_me(message: types.Message):
         else:
             # Пользователь не найден в базе данных
             await message.answer("Тебя нет в базе данных.")
+
+# Обработчик команды /level
+@dp.message(Command("level"))
+async def cmd_level(message: types.Message):
+    answer = (
+        "Существует три уровня участника. Уровень повышается засчет посещения наших мероприятий. "
+        "На каждом уровне доступно ограниченное количество приглашений (они обновляются каждое мероприятие).\n\n"
+        "1 посещение - 1й уровень - 1 приглашение\n"
+        "3 посещения - 2й уровень - 2 приглашения\n"
+        "5 посещений - 3й уровень - 3 приглашения\n\n"
+        "Вы можете использовать свои приглашения, чтобы пригласить на мероприятие своих друзей, не являющихся участниками нашего общества. "
+        "После этого они также будут внесены в список наших участников."
+    )
+    await message.answer(answer)
+
+# Обработчик команды /invite
+@dp.message(Command("invite"))
+async def cmd_invite(message: types.Message, state: FSMContext):
+    telegram_nick = message.from_user.username
+
+    async with async_session() as session:
+        # Найти пользователя по telegram_nick
+        result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
+        user = result.scalars().first()
+
+        if user:
+            if user.available_invitations and user.available_invitations > 0:
+                # Если есть доступные приглашения
+                invite_message = (
+                    f"Вы посетили {user.visit_count} наше мероприятие.\n"
+                    f"Ваш уровень: {user.level}\n"
+                    f"Вы уже пригласили: {user.invitation_count}\n"
+                    f"Вам доступно {user.available_invitations} приглашение(ий)\n"
+                    "Введите никнейм вашего друга в телеграме"
+                )
+                await message.answer(invite_message)
+                await state.set_state(InviteState.waiting_for_invite_nickname)
+                await state.update_data(inviter=telegram_nick)
+            else:
+                # Если нет доступных приглашений
+                invite_message = (
+                    f"Вы посетили {user.visit_count} наше мероприятие.\n"
+                    f"Ваш уровень: {user.level}\n"
+                    f"Вы уже пригласили: {user.invitation_count}\n"
+                    "Вам не доступны приглашения"
+                )
+                await message.answer(invite_message)
+        else:
+            # Пользователь не найден в базе данных
+            await message.answer("Тебя нет в базе данных.")
+
+@dp.message(InviteState.waiting_for_invite_nickname)
+async def process_invite_nickname(message: types.Message, state: FSMContext):
+    invitee_nick = message.text.strip().lstrip('@')
+    data = await state.get_data()
+    inviter_nick = data['inviter']
+
+    async with async_session() as session:
+        # Проверка, существует ли уже пользователь с таким никнеймом
+        existing_user_result = await session.execute(select(User).where(User.telegram_nick == invitee_nick))
+        existing_user = existing_user_result.scalars().first()
+
+        if existing_user:
+            await message.answer("Пользователь с таким никнеймом уже существует в базе данных.")
+        else:
+            # Найти приглашающего пользователя
+            inviter_result = await session.execute(select(User).where(User.telegram_nick == inviter_nick))
+            inviter = inviter_result.scalars().first()
+
+            if inviter and inviter.available_invitations and inviter.available_invitations > 0:
+                # Обновить данные приглашающего пользователя
+                inviter.available_invitations -= 1
+                inviter.invitation_count += 1
+                session.add(inviter)
+
+                # Создать новую запись для приглашенного пользователя
+                new_user = User(
+                    telegram_nick=invitee_nick,
+                    full_name="",
+                    level=0,
+                    visit_count=0,
+                    invitation_count=0,
+                    available_invitations=0,
+                    inviter=inviter_nick
+                )
+                session.add(new_user)
+                await session.commit()
+
+                await message.answer(f"Пользователь @{invitee_nick} успешно приглашен!")
+            else:
+                await message.answer("У вас недостаточно приглашений для этого действия.")
+
+    await state.clear()
 
 async def main():
     await dp.start_polling(bot)
