@@ -1,4 +1,5 @@
 import asyncio
+import re
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -48,23 +49,54 @@ LEVEL_MESSAGES = {
 class InviteState(StatesGroup):
     waiting_for_invite_nickname = State()
 
+class FullNameState(StatesGroup):
+    waiting_for_full_name = State()
+
+# Проверка валидности ФИО
+def is_valid_full_name(full_name: str) -> bool:
+    return bool(re.match(r'^[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+$', full_name))
+
 # Обработчик команды /start
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
 
-    # Создание сессии и запрос к базе данных
     async with async_session() as session:
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
         user = result.scalars().first()
 
         if user:
-            # Пользователь найден в базе данных
-            level_message = LEVEL_MESSAGES.get(user.level, "Привет!")
-            await message.answer(level_message)
+            if not user.full_name:
+                await message.answer("Пожалуйста, введите ваше ФИО (например: Иванов Иван Иванович).")
+                await state.set_state(FullNameState.waiting_for_full_name)
+                await state.update_data(user_id=user.id)
+            else:
+                level_message = LEVEL_MESSAGES.get(user.level, "Привет!")
+                await message.answer(level_message)
         else:
-            # Пользователь не найден в базе данных
             await message.answer("Тебя нет в базе данных.")
+
+@dp.message(FullNameState.waiting_for_full_name)
+async def process_full_name(message: types.Message, state: FSMContext):
+    full_name = message.text.strip()
+    
+    if not is_valid_full_name(full_name):
+        await message.answer("Некорректный формат ФИО. Пожалуйста, введите ваше ФИО в формате 'Фамилия Имя Отчество'.")
+        return
+    
+    data = await state.get_data()
+    user_id = data['user_id']
+
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalars().first()
+        if user:
+            user.full_name = full_name
+            session.add(user)
+            await session.commit()
+            await message.answer("Ваше ФИО успешно сохранено!")
+    
+    await state.clear()
 
 # Обработчик команды /me
 @dp.message(Command("me"))
@@ -72,17 +104,14 @@ async def cmd_me(message: types.Message):
     telegram_nick = message.from_user.username
 
     async with async_session() as session:
-        # Найти пользователя по telegram_nick
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
         user = result.scalars().first()
 
         if user:
-            # Найти всех пользователей, которых он пригласил
             invitees_result = await session.execute(select(User).where(User.inviter == telegram_nick))
             invitees = invitees_result.scalars().all()
             invitees_list = "\n".join([invitee.telegram_nick for invitee in invitees]) or "Нет приглашенных пользователей"
 
-            # Формируем сообщение
             user_info = (
                 f"Имя пользователя: {user.full_name}\n"
                 f"Уровень: {user.level}\n"
@@ -94,7 +123,6 @@ async def cmd_me(message: types.Message):
             )
             await message.answer(user_info)
         else:
-            # Пользователь не найден в базе данных
             await message.answer("Тебя нет в базе данных.")
 
 # Обработчик команды /level
@@ -117,13 +145,11 @@ async def cmd_invite(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
 
     async with async_session() as session:
-        # Найти пользователя по telegram_nick
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
         user = result.scalars().first()
 
         if user:
             if user.available_invitations and user.available_invitations > 0:
-                # Если есть доступные приглашения
                 invite_message = (
                     f"Вы посетили {user.visit_count} наше мероприятие.\n"
                     f"Ваш уровень: {user.level}\n"
@@ -135,7 +161,6 @@ async def cmd_invite(message: types.Message, state: FSMContext):
                 await state.set_state(InviteState.waiting_for_invite_nickname)
                 await state.update_data(inviter=telegram_nick)
             else:
-                # Если нет доступных приглашений
                 invite_message = (
                     f"Вы посетили {user.visit_count} наше мероприятие.\n"
                     f"Ваш уровень: {user.level}\n"
@@ -144,7 +169,6 @@ async def cmd_invite(message: types.Message, state: FSMContext):
                 )
                 await message.answer(invite_message)
         else:
-            # Пользователь не найден в базе данных
             await message.answer("Тебя нет в базе данных.")
 
 @dp.message(InviteState.waiting_for_invite_nickname)
@@ -154,24 +178,20 @@ async def process_invite_nickname(message: types.Message, state: FSMContext):
     inviter_nick = data['inviter']
 
     async with async_session() as session:
-        # Проверка, существует ли уже пользователь с таким никнеймом
         existing_user_result = await session.execute(select(User).where(User.telegram_nick == invitee_nick))
         existing_user = existing_user_result.scalars().first()
 
         if existing_user:
             await message.answer("Пользователь с таким никнеймом уже существует в базе данных.")
         else:
-            # Найти приглашающего пользователя
             inviter_result = await session.execute(select(User).where(User.telegram_nick == inviter_nick))
             inviter = inviter_result.scalars().first()
 
             if inviter and inviter.available_invitations and inviter.available_invitations > 0:
-                # Обновить данные приглашающего пользователя
                 inviter.available_invitations -= 1
                 inviter.invitation_count += 1
                 session.add(inviter)
 
-                # Создать новую запись для приглашенного пользователя
                 new_user = User(
                     telegram_nick=invitee_nick,
                     full_name="",
