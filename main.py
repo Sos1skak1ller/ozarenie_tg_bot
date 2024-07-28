@@ -1,5 +1,6 @@
 import asyncio
 import re
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -8,7 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.future import select
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, Date, Time
 
 # Настройки
 API_TOKEN = '7050222486:AAHW-e9JU_43Cc3BWwbCewZL3UBFR-MqogQ'
@@ -37,6 +38,15 @@ class User(Base):
     available_invitations = Column(Integer, default=None)
     inviter = Column(String(50), default=None)
 
+# Определение модели ивента
+class Event(Base):
+    __tablename__ = 'ivents'
+    id = Column(Integer, primary_key=True, index=True)
+    event_date = Column(Date, nullable=False)
+    event_time = Column(Time, nullable=False)
+    location = Column(String(255), nullable=False)
+    event_name = Column(String(255), nullable=False)
+
 # Сообщения в зависимости от уровня пользователя
 LEVEL_MESSAGES = {
     0: "Привет, новичок!",
@@ -45,16 +55,16 @@ LEVEL_MESSAGES = {
     3: "Привет, мастер!"
 }
 
+# Проверка валидности ФИО
+def is_valid_full_name(full_name: str) -> bool:
+    return bool(re.match(r'^[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+$', full_name))
+
 # Определение состояний для FSM
 class InviteState(StatesGroup):
     waiting_for_invite_nickname = State()
 
 class FullNameState(StatesGroup):
     waiting_for_full_name = State()
-
-# Проверка валидности ФИО
-def is_valid_full_name(full_name: str) -> bool:
-    return bool(re.match(r'^[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+$', full_name))
 
 # Обработчик команды /start
 @dp.message(Command("start"))
@@ -210,7 +220,36 @@ async def process_invite_nickname(message: types.Message, state: FSMContext):
 
     await state.clear()
 
+# Обработчик команды /buy
+@dp.message(Command("buy"))
+async def cmd_buy(message: types.Message):
+    async with async_session() as session:
+        current_date = datetime.now().date()
+        result = await session.execute(
+            select(Event)
+            .where(Event.event_date >= current_date)
+            .order_by(Event.event_date, Event.event_time)
+        )
+        event = result.scalars().first()
+
+        if event:
+            event_datetime = datetime.combine(event.event_date, event.event_time)
+            time_until_event = event_datetime - datetime.now()
+
+            if time_until_event > timedelta(weeks=2):
+                await message.answer("Ближайших ивентов нет.")
+            else:
+                await message.answer(
+                    f"До ближайшего ивента {time_until_event.days} дней и {time_until_event.seconds // 3600} часов.\n"
+                    "Вы можете купить билеты."
+                )
+        else:
+            await message.answer("Ближайших ивентов нет.")
+
 async def main():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
