@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.future import select
 from sqlalchemy import Column, Integer, String, Date, Time
+from keyboards import get_main_keyboard
+from aiogram import F
 
 # Настройки
 API_TOKEN = '7050222486:AAHW-e9JU_43Cc3BWwbCewZL3UBFR-MqogQ'
@@ -30,12 +32,27 @@ async_session = sessionmaker(
 BAN_LEVEL = -1
 ADMIN_LEVEL = 777
 
-# Настройка базы данных
-Base = declarative_base()
-engine = create_async_engine(DATABASE_URL, echo=True)
-async_session = sessionmaker(
-    engine, expire_on_commit=False, class_=AsyncSession
-)
+LEVEL_MESSAGES = {
+    0: "Привет, новичок!",
+    1: "Привет, опытный пользователь!",
+    2: "Привет, профессионал!",
+    3: "Привет, мастер!"
+}
+
+# Проверка валидности ФИО
+def is_valid_full_name(full_name: str) -> bool:
+    return bool(re.match(r'^[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+$', full_name))
+
+# Определение состояний для FSM
+class InviteState(StatesGroup):
+    waiting_for_invite_nickname = State()
+
+class FullNameState(StatesGroup):
+    waiting_for_full_name = State()
+
+# Определение состояний
+class InviteState(StatesGroup):
+    waiting_for_invite_nickname = State()  # Состояние ожидания ника приглашаемого
 
 # Определение модели пользователя
 class User(Base):
@@ -66,13 +83,6 @@ class Ticket(Base):
     event_id = Column(Integer, nullable=False)
     code = Column(String(50), nullable=False, unique=True)
 
-# Создание клавиатуры с кнопками
-def get_main_keyboard():
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    buttons = ["/invite", "/buy"]
-    keyboard.add(*buttons)
-    return keyboard
-
 # Проверка, забанен ли пользователь
 async def is_user_banned(telegram_nick):
     async with async_session() as session:
@@ -81,7 +91,7 @@ async def is_user_banned(telegram_nick):
         return user.level == BAN_LEVEL if user else False
 
 # Обработчик команды /start
-@dp.message(Command("start"))
+
 async def cmd_start(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
 
@@ -92,8 +102,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
         user = result.scalars().first()
 
-        keyboard = get_main_keyboard()
-        
+        keyboard = get_main_keyboard()  # Получаем клавиатуру
+
         if user:
             await message.answer("Добро пожаловать в 0z4r3n13!", reply_markup=keyboard)
 
@@ -108,10 +118,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
                 level_message = LEVEL_MESSAGES.get(user.level, "Привет!")
                 await message.answer(level_message, reply_markup=keyboard)
         else:
-            await message.answer("Тебя нет в базе данных.", reply_markup=keyboard)
+            await message.answer("Тебя нет в базе данных.")
 
-# Обработчик команды /invite
-@dp.message(Command("invite"))
+
 async def cmd_invite(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
 
@@ -132,7 +141,7 @@ async def cmd_invite(message: types.Message, state: FSMContext):
                     "Введите никнейм вашего друга в телеграме"
                 )
                 await message.answer(invite_message)
-                await state.set_state(InviteState.waiting_for_invite_nickname)
+                await state.set_state(InviteState.waiting_for_invite_nickname)  # Используйте определенное состояние
                 await state.update_data(inviter=telegram_nick)
             else:
                 invite_message = (
@@ -145,7 +154,6 @@ async def cmd_invite(message: types.Message, state: FSMContext):
         else:
             await message.answer("Тебя нет в базе данных.")
 
-@dp.message(InviteState.waiting_for_invite_nickname)
 async def process_invite_nickname(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
 
@@ -189,8 +197,21 @@ async def process_invite_nickname(message: types.Message, state: FSMContext):
 
     await state.clear()
 
+
+async def cmd_level(message: types.Message):
+    answer = (
+        "Существует три уровня участника. Уровень повышается засчет посещения наших мероприятий. "
+        "На каждом уровне доступно ограниченное количество приглашений (они обновляются каждое мероприятие).\n\n"
+        "1 посещение - 1й уровень - 1 приглашение\n"
+        "3 посещения - 2й уровень - 2 приглашения\n"
+        "5 посещений - 3й уровень - 3 приглашения\n\n"
+        "Вы можете использовать свои приглашения, чтобы пригласить на мероприятие своих друзей, не являющихся участниками нашего общества. "
+        "После этого они также будут внесены в список наших участников."
+    )
+    await message.answer(answer)
+
+
 # Обработчик команды /buy
-@dp.message(Command("buy"))
 async def cmd_buy(message: types.Message):
     telegram_nick = message.from_user.username
 
@@ -222,30 +243,44 @@ async def cmd_buy(message: types.Message):
                 available_ticket = code_result.scalars().first()
 
                 if available_ticket:
-                    # Назначение кода текущему пользователю
-                    available_ticket.user_id = message.from_user.id
-                    available_ticket.event_id = event.id
-
-                    session.add(available_ticket)
+                    available_ticket.user_id = message.from_user.id  # Назначаем билет пользователю
                     await session.commit()
-
-                    # Сообщение с информацией о покупке билета
-                    await message.answer(
-                        f"До ближайшего ивента {time_until_event.days} дней и {time_until_event.seconds // 3600} часов.\n"
-                        f"Ваш уникальный код: {available_ticket.code}"
-                    )
+                    await message.answer(f"Вы купили билет на событие {event.event_name}!")
                 else:
-                    await message.answer("Нет доступных кодов для покупки билетов.")
+                    await message.answer("Извините, коды на билеты закончились.")
         else:
-            await message.answer("Ближайших ивентов нет.")
+            await message.answer("Извините, ивенты закончились.")
 
-# Обработчик команды /me
-@dp.message(Command("me"))
-async def cmd_me(message: types.Message):
+async def cmd_ban(message: types.Message):
     telegram_nick = message.from_user.username
 
-    if await is_user_banned(telegram_nick):
-        return  # Игнорируем забаненных пользователей
+    # Проверяем, является ли пользователь администратором
+    async with async_session() as session:
+        admin_result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
+        admin_user = admin_result.scalars().first()
+
+        if admin_user and admin_user.level == 777:  # Проверяем уровень администратора
+            parts = message.text.split()
+            if len(parts) < 2:
+                await message.answer("Пожалуйста, укажите никнейм пользователя, которого хотите забанить.")
+                return
+
+            user_to_ban_nick = parts[1].lstrip('@')
+
+            user_result = await session.execute(select(User).where(User.telegram_nick == user_to_ban_nick))
+            user_to_ban = user_result.scalars().first()
+
+            if user_to_ban:
+                user_to_ban.level = -1  # Устанавливаем уровень -1 для забаненного
+                await session.commit()
+                await message.answer(f"Пользователь @{user_to_ban_nick} был забанен.")
+            else:
+                await message.answer("Пользователь не найден.")
+        else:
+            await message.answer("У вас недостаточно прав для выполнения этой команды.")
+
+async def cmd_me(message: types.Message):
+    telegram_nick = message.from_user.username
 
     async with async_session() as session:
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
@@ -253,37 +288,40 @@ async def cmd_me(message: types.Message):
 
         if user:
             user_info = (
-                f"Ваш ник: {user.telegram_nick}\n"
-                f"ФИО: {user.full_name}\n"
+                f"ФИО: {user.full_name or 'Не указано'}\n"
                 f"Уровень: {user.level}\n"
                 f"Количество посещений: {user.visit_count}\n"
                 f"Количество приглашений: {user.invitation_count}\n"
-                f"Доступные приглашения: {user.available_invitations}"
+                f"Доступные приглашения: {user.available_invitations or 'Нет'}\n"
+                f"Пригласивший: @{user.inviter or 'Нет'}"
             )
             await message.answer(user_info)
         else:
-            await message.answer("Вы не зарегистрированы в системе.")
+            await message.answer("Тебя нет в базе данных.")
 
-# Обработчик команды help
-@dp.message(Command("help"))
+
 async def cmd_help(message: types.Message):
-    telegram_nick = message.from_user.username
-
-    if await is_user_banned(telegram_nick):
-        return  # Игнорируем забаненных пользователей
-
     help_text = (
-        "Если у вас возникили проблемы при работе с ботом, просим выйти с нами на связь любым удобным для вас способом:\n\n"
-        "@oz4r3n13supp0rt\n\n"
-        "0z4r3n13supp0rt@gmail.com"
+        "Тутутутутутут"
     )
     await message.answer(help_text)
 
-# Основная функция
-async def main():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
 
+def register_handlers(dp: Dispatcher):
+    dp.message.register(cmd_start, Command(commands=["start"]))
+    dp.message.register(cmd_invite, Command(commands=["invite"]))
+    dp.message.register(cmd_me, Command(commands=["me"]))
+    dp.message.register(cmd_buy, Command(commands=["buy"]))
+    dp.message.register(cmd_ban, Command(commands=["ban"]))
+    dp.message.register(cmd_level, Command(commands=["level"]))
+    dp.message.register(cmd_help, Command(commands=["help"]))
+    
+    
+    
+
+async def main():
+    register_handlers(dp)
+    await bot.delete_webhook()
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
