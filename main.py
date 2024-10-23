@@ -15,6 +15,8 @@ from sqlalchemy import Column, Integer, String, Date, Time
 API_TOKEN = '7050222486:AAHW-e9JU_43Cc3BWwbCewZL3UBFR-MqogQ'
 DATABASE_URL = "postgresql+asyncpg://postgres:pass@localhost:5432/ozarenie_test_db"
 
+
+
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -47,29 +49,28 @@ class Event(Base):
     location = Column(String(255), nullable=False)
     event_name = Column(String(255), nullable=False)
 
-# Сообщения в зависимости от уровня пользователя
-LEVEL_MESSAGES = {
-    0: "Привет, новичок!",
-    1: "Привет, опытный пользователь!",
-    2: "Привет, профессионал!",
-    3: "Привет, мастер!"
-}
+# Определение модели билета
+class Ticket(Base):
+    __tablename__ = 'tickets'
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False)
+    event_id = Column(Integer, nullable=False)
+    code = Column(String(50), nullable=False, unique=True)
 
-# Проверка валидности ФИО
-def is_valid_full_name(full_name: str) -> bool:
-    return bool(re.match(r'^[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+$', full_name))
-
-# Определение состояний для FSM
-class InviteState(StatesGroup):
-    waiting_for_invite_nickname = State()
-
-class FullNameState(StatesGroup):
-    waiting_for_full_name = State()
+# Создание клавиатуры с кнопками
+def get_main_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    buttons = ["/invite", "/buy"]
+    keyboard.add(*buttons)
+    return keyboard
 
 # Обработчик команды /start
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
+    keyboard = get_main_keyboard()
+    await message.answer("Добро пожаловать!", reply_markup=keyboard)
+
 
     async with async_session() as session:
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
@@ -77,77 +78,14 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
         if user:
             if not user.full_name:
-                await message.answer("Пожалуйста, введите ваше ФИО (например: Иванов Иван Иванович).")
+                await message.answer("Пожалуйста, введите ваше ФИО (например: Иванов Иван Иванович).", reply_markup=keyboard)
                 await state.set_state(FullNameState.waiting_for_full_name)
                 await state.update_data(user_id=user.id)
             else:
                 level_message = LEVEL_MESSAGES.get(user.level, "Привет!")
-                await message.answer(level_message)
+                await message.answer(level_message, reply_markup=keyboard)
         else:
-            await message.answer("Тебя нет в базе данных.")
-
-@dp.message(FullNameState.waiting_for_full_name)
-async def process_full_name(message: types.Message, state: FSMContext):
-    full_name = message.text.strip()
-    
-    if not is_valid_full_name(full_name):
-        await message.answer("Некорректный формат ФИО. Пожалуйста, введите ваше ФИО в формате 'Фамилия Имя Отчество'.")
-        return
-    
-    data = await state.get_data()
-    user_id = data['user_id']
-
-    async with async_session() as session:
-        result = await session.execute(select(User).where(User.id == user_id))
-        user = result.scalars().first()
-        if user:
-            user.full_name = full_name
-            session.add(user)
-            await session.commit()
-            await message.answer("Ваше ФИО успешно сохранено!")
-    
-    await state.clear()
-
-# Обработчик команды /me
-@dp.message(Command("me"))
-async def cmd_me(message: types.Message):
-    telegram_nick = message.from_user.username
-
-    async with async_session() as session:
-        result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
-        user = result.scalars().first()
-
-        if user:
-            invitees_result = await session.execute(select(User).where(User.inviter == telegram_nick))
-            invitees = invitees_result.scalars().all()
-            invitees_list = "\n".join([invitee.telegram_nick for invitee in invitees]) or "Нет приглашенных пользователей"
-
-            user_info = (
-                f"Имя пользователя: {user.full_name}\n"
-                f"Уровень: {user.level}\n"
-                f"Количество посещений: {user.visit_count}\n"
-                f"Количество приглашений: {user.invitation_count}\n"
-                f"Доступно приглашений: {user.available_invitations if user.available_invitations is not None else 'Нет данных'}\n"
-                f"Вас пригласил: {user.inviter if user.inviter else 'Никто'}\n"
-                f"Вы пригласили:\n{invitees_list}"
-            )
-            await message.answer(user_info)
-        else:
-            await message.answer("Тебя нет в базе данных.")
-
-# Обработчик команды /level
-@dp.message(Command("level"))
-async def cmd_level(message: types.Message):
-    answer = (
-        "Существует три уровня участника. Уровень повышается засчет посещения наших мероприятий. "
-        "На каждом уровне доступно ограниченное количество приглашений (они обновляются каждое мероприятие).\n\n"
-        "1 посещение - 1й уровень - 1 приглашение\n"
-        "3 посещения - 2й уровень - 2 приглашения\n"
-        "5 посещений - 3й уровень - 3 приглашения\n\n"
-        "Вы можете использовать свои приглашения, чтобы пригласить на мероприятие своих друзей, не являющихся участниками нашего общества. "
-        "После этого они также будут внесены в список наших участников."
-    )
-    await message.answer(answer)
+            await message.answer("Тебя нет в базе данных.", reply_markup=keyboard)
 
 # Обработчик команды /invite
 @dp.message(Command("invite"))
@@ -236,16 +174,73 @@ async def cmd_buy(message: types.Message):
             event_datetime = datetime.combine(event.event_date, event.event_time)
             time_until_event = event_datetime - datetime.now()
 
-            if time_until_event > timedelta(weeks=2):
+            if time_until_event > timedelta(weeks=4):
                 await message.answer("Ближайших ивентов нет.")
             else:
-                await message.answer(
-                    f"До ближайшего ивента {time_until_event.days} дней и {time_until_event.seconds // 3600} часов.\n"
-                    "Вы можете купить билеты."
+                # Поиск первого доступного кода в таблице Ticket
+                code_result = await session.execute(
+                    select(Ticket)
+                    .where(Ticket.user_id == None)  # Проверка, что код не назначен никому
+                    .order_by(Ticket.id)
                 )
+                available_ticket = code_result.scalars().first()
+
+                if available_ticket:
+                    # Назначение кода текущему пользователю
+                    available_ticket.user_id = message.from_user.id
+                    available_ticket.event_id = event.id
+
+                    session.add(available_ticket)
+                    await session.commit()
+
+                    # Сообщение с информацией о покупке билета
+                    await message.answer(
+                        f"До ближайшего ивента {time_until_event.days} дней и {time_until_event.seconds // 3600} часов.\n"
+                        f"Ваш уникальный код: {available_ticket.code}"
+                    )
+                else:
+                    await message.answer("Нет доступных кодов для покупки билетов.")
         else:
             await message.answer("Ближайших ивентов нет.")
 
+
+# Обработчик команды /me
+@dp.message(Command("me"))
+async def cmd_me(message: types.Message):
+    telegram_nick = message.from_user.username
+
+    async with async_session() as session:
+        # Проверяем, существует ли пользователь в базе данных
+        result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
+        user = result.scalars().first()
+
+        if user:
+            # Формируем сообщение с информацией о пользователе
+            user_info = (
+                f"Информация о вас:\n"
+                f"ФИО: {user.full_name or 'Не указано'}\n"
+                f"Уровень: {user.level}\n"
+                f"Количество посещений: {user.visit_count}\n"
+                f"Количество приглашений: {user.invitation_count}\n"
+                f"Доступные приглашения: {user.available_invitations or 0}\n"
+                f"Пригласивший: @{user.inviter or 'Нет'}"
+            )
+            await message.answer(user_info)
+        else:
+            # Сообщение, если пользователя нет в базе данных
+            await message.answer("Тебя нет в базе данных.")
+
+#Обработчик команды help
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    help_text = (
+        "Если у вас возникили проблемы при работе с ботом, просим выйти с нами на связь любым удобным для вас способом:\n\n"
+        "@oz4r3n13supp0rt\n\n"
+        "0z4r3n13supp0rt@gmail.com"
+    )
+    await message.answer(help_text)
+
+    
 async def main():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
