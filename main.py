@@ -15,11 +15,20 @@ from sqlalchemy import Column, Integer, String, Date, Time
 API_TOKEN = '7050222486:AAHW-e9JU_43Cc3BWwbCewZL3UBFR-MqogQ'
 DATABASE_URL = "postgresql+asyncpg://postgres:pass@localhost:5432/ozarenie_test_db"
 
-
-
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
+
+# Настройка базы данных
+Base = declarative_base()
+engine = create_async_engine(DATABASE_URL, echo=True)
+async_session = sessionmaker(
+    engine, expire_on_commit=False, class_=AsyncSession
+)
+
+# Определение уровней пользователей
+BAN_LEVEL = -1
+ADMIN_LEVEL = 777
 
 # Настройка базы данных
 Base = declarative_base()
@@ -64,19 +73,33 @@ def get_main_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
+# Проверка, забанен ли пользователь
+async def is_user_banned(telegram_nick):
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
+        user = result.scalars().first()
+        return user.level == BAN_LEVEL if user else False
+
 # Обработчик команды /start
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
-    keyboard = get_main_keyboard()
-    await message.answer("Добро пожаловать!", reply_markup=keyboard)
 
+    if await is_user_banned(telegram_nick):
+        return  # Игнорируем забаненных пользователей
 
     async with async_session() as session:
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
         user = result.scalars().first()
 
+        keyboard = get_main_keyboard()
+        
         if user:
+            await message.answer("Добро пожаловать в 0z4r3n13!", reply_markup=keyboard)
+
+            if user.level == ADMIN_LEVEL:
+                await message.answer("Приветули Серега, твой ботик на связи, Сосал? Походу сейчас кто-то из пользователей отлетит в бан.", reply_markup=keyboard)
+
             if not user.full_name:
                 await message.answer("Пожалуйста, введите ваше ФИО (например: Иванов Иван Иванович).", reply_markup=keyboard)
                 await state.set_state(FullNameState.waiting_for_full_name)
@@ -91,6 +114,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
 @dp.message(Command("invite"))
 async def cmd_invite(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
+
+    if await is_user_banned(telegram_nick):
+        return  # Игнорируем забаненных пользователей
 
     async with async_session() as session:
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
@@ -121,6 +147,11 @@ async def cmd_invite(message: types.Message, state: FSMContext):
 
 @dp.message(InviteState.waiting_for_invite_nickname)
 async def process_invite_nickname(message: types.Message, state: FSMContext):
+    telegram_nick = message.from_user.username
+
+    if await is_user_banned(telegram_nick):
+        return  # Игнорируем забаненных пользователей
+
     invitee_nick = message.text.strip().lstrip('@')
     data = await state.get_data()
     inviter_nick = data['inviter']
@@ -161,6 +192,11 @@ async def process_invite_nickname(message: types.Message, state: FSMContext):
 # Обработчик команды /buy
 @dp.message(Command("buy"))
 async def cmd_buy(message: types.Message):
+    telegram_nick = message.from_user.username
+
+    if await is_user_banned(telegram_nick):
+        return  # Игнорируем забаненных пользователей
+
     async with async_session() as session:
         current_date = datetime.now().date()
         result = await session.execute(
@@ -203,36 +239,39 @@ async def cmd_buy(message: types.Message):
         else:
             await message.answer("Ближайших ивентов нет.")
 
-
 # Обработчик команды /me
 @dp.message(Command("me"))
 async def cmd_me(message: types.Message):
     telegram_nick = message.from_user.username
 
+    if await is_user_banned(telegram_nick):
+        return  # Игнорируем забаненных пользователей
+
     async with async_session() as session:
-        # Проверяем, существует ли пользователь в базе данных
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
         user = result.scalars().first()
 
         if user:
-            # Формируем сообщение с информацией о пользователе
             user_info = (
-                f"Информация о вас:\n"
-                f"ФИО: {user.full_name or 'Не указано'}\n"
+                f"Ваш ник: {user.telegram_nick}\n"
+                f"ФИО: {user.full_name}\n"
                 f"Уровень: {user.level}\n"
                 f"Количество посещений: {user.visit_count}\n"
                 f"Количество приглашений: {user.invitation_count}\n"
-                f"Доступные приглашения: {user.available_invitations or 0}\n"
-                f"Пригласивший: @{user.inviter or 'Нет'}"
+                f"Доступные приглашения: {user.available_invitations}"
             )
             await message.answer(user_info)
         else:
-            # Сообщение, если пользователя нет в базе данных
-            await message.answer("Тебя нет в базе данных.")
+            await message.answer("Вы не зарегистрированы в системе.")
 
-#Обработчик команды help
+# Обработчик команды help
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
+    telegram_nick = message.from_user.username
+
+    if await is_user_banned(telegram_nick):
+        return  # Игнорируем забаненных пользователей
+
     help_text = (
         "Если у вас возникили проблемы при работе с ботом, просим выйти с нами на связь любым удобным для вас способом:\n\n"
         "@oz4r3n13supp0rt\n\n"
@@ -240,7 +279,7 @@ async def cmd_help(message: types.Message):
     )
     await message.answer(help_text)
 
-    
+# Основная функция
 async def main():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
