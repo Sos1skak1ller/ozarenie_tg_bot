@@ -38,9 +38,9 @@ ADMIN_LEVEL = 777
 
 LEVEL_MESSAGES = {
     0: "Привет, новичок!",
-    1: "Привет, опытный пользователь!",
-    2: "Привет, профессионал!",
-    3: "Привет, мастер!"
+    1: "Привет, пользователь 1 уровня!",
+    2: "Привет, пользователь 2 уровня!",
+    3: "Привет, пользователь 3 уровня!"
 }
 
 # Проверка валидности ФИО
@@ -426,7 +426,7 @@ async def handle_me_button(message: types.Message):
 
 # Обработчик нажатия на кнопку "Информация об уровнях"
 async def handle_level_info_button(message: types.Message):
-    if message.text == "Информация об уровнях":
+    if message.text == "Об уровнях":
         await cmd_level(message)
 
 
