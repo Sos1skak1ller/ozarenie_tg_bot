@@ -19,8 +19,8 @@ from sqlalchemy.future import select
 
 # Настройки
 API_TOKEN = '7050222486:AAHW-e9JU_43Cc3BWwbCewZL3UBFR-MqogQ'
-DATABASE_URL = "postgresql+asyncpg://myuser:mypassword@localhost:5432/mydatabase"
-
+# DATABASE_URL = "postgresql+asyncpg://myuser:mypassword@localhost:5432/mydatabase"
+DATABASE_URL = "postgresql+asyncpg://postgres:pass@localhost:5432/ozarenie_test_db"
 
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
@@ -47,10 +47,6 @@ LEVEL_MESSAGES = {
 # Проверка валидности ФИО
 def is_valid_full_name(full_name: str) -> bool:
     return bool(re.match(r'^[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+$', full_name))
-
-# Определение состояний для FSM
-class InviteState(StatesGroup):
-    waiting_for_invite_nickname = State()
 
 class FullNameState(StatesGroup):
     waiting_for_full_name = State()
@@ -407,6 +403,7 @@ async def cmd_help(message: types.Message):
 
 
 async def handle_invite_button(message: types.Message, state: FSMContext):
+    print(f"Кнопка нажата: {message.text} от {message.from_user.username}")
     if message.text == "Пригласить":
         await cmd_invite(message, state)  # Передаем state
 
