@@ -1,17 +1,21 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 def get_main_keyboard():
-    # Create a ReplyKeyboardMarkup instance with resize_keyboard set to True
-    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
-
-    # Create buttons explicitly with their text parameter
-    invite_button = KeyboardButton(text="/invite")
-    buy_button = KeyboardButton(text="/buy")
-    help_button = KeyboardButton(text="/help")
-    me_button = KeyboardButton(text="/me")
-
-    # Add buttons to the keyboard
-    keyboard.add(invite_button, buy_button)
-    keyboard.add(help_button, me_button)
-
+    invite_button = KeyboardButton(text='Пригласить')
+    buy_button = KeyboardButton(text='Купить билет')
+    help_button = KeyboardButton(text='Помощь')
+    me_button = KeyboardButton(text='Обо мне')
+    info_button = KeyboardButton(text='Информация об уровнях')
+    
+    # Создаем клавиатуру с кнопками, используя параметр keyboard
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [invite_button, info_button],
+            [help_button, me_button], 
+            [buy_button]
+        ],
+        resize_keyboard=True
+    )
+    
     return keyboard
+

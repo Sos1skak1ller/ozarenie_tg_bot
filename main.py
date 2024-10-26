@@ -12,6 +12,10 @@ from sqlalchemy.future import select
 from sqlalchemy import Column, Integer, String, Date, Time
 from keyboards import get_main_keyboard
 from aiogram import F
+from aiogram import types
+from sqlalchemy.future import select
+
+
 
 # Настройки
 API_TOKEN = '7050222486:AAHW-e9JU_43Cc3BWwbCewZL3UBFR-MqogQ'
@@ -50,21 +54,22 @@ class InviteState(StatesGroup):
 class FullNameState(StatesGroup):
     waiting_for_full_name = State()
 
-# Определение состояний
+# Определение состояний для FSM
 class InviteState(StatesGroup):
-    waiting_for_invite_nickname = State()  # Состояние ожидания ника приглашаемого
+    waiting_for_invite_nickname = State()
+
 
 # Определение модели пользователя
 class User(Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True, index=True)
-    telegram_nick = Column(String(50), unique=True, index=True, nullable=False)
-    full_name = Column(String(100), nullable=False)
+    telegram_nick = Column(String(100), unique=True, index=True, nullable=False)
+    full_name = Column(String(250), nullable=True)
     level = Column(Integer, nullable=False, default=0)
     visit_count = Column(Integer, nullable=False, default=0)
     invitation_count = Column(Integer, nullable=False, default=0)
     available_invitations = Column(Integer, default=None)
-    inviter = Column(String(50), default=None)
+    inviter = Column(String(100), default=None)
 
 # Определение модели ивента
 class Event(Base):
@@ -74,14 +79,15 @@ class Event(Base):
     event_time = Column(Time, nullable=False)
     location = Column(String(255), nullable=False)
     event_name = Column(String(255), nullable=False)
+    tickets_sale_link = Column(String) 
 
 # Определение модели билета
 class Ticket(Base):
     __tablename__ = 'tickets'
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, nullable=False)
+    user_id = Column(String(100), nullable=True)
     event_id = Column(Integer, nullable=False)
-    code = Column(String(50), nullable=False, unique=True)
+    code = Column(String, nullable=False, unique=False)
 
 # Проверка, забанен ли пользователь
 async def is_user_banned(telegram_nick):
@@ -108,7 +114,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
             await message.answer("Добро пожаловать в 0z4r3n13!", reply_markup=keyboard)
 
             if user.level == ADMIN_LEVEL:
-                await message.answer("Приветули Серега, твой ботик на связи, Сосал? Походу сейчас кто-то из пользователей отлетит в бан.", reply_markup=keyboard)
+                await message.answer("Это админка прошу тебя использовать скрытый функционал с умом", reply_markup=keyboard)
 
             if not user.full_name:
                 await message.answer("Пожалуйста, введите ваше ФИО (например: Иванов Иван Иванович).", reply_markup=keyboard)
@@ -118,7 +124,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
                 level_message = LEVEL_MESSAGES.get(user.level, "Привет!")
                 await message.answer(level_message, reply_markup=keyboard)
         else:
-            await message.answer("Тебя нет в базе данных.")
+            await message.answer("Вас нет в базе данных.\n Если вы были гостем нашего превого мероприятия «Anniversary 20th», напиши нам \n\n 0z4r3n13supp0rt@gmail.com \n\n @oz4r3n13support")
 
 
 async def cmd_invite(message: types.Message, state: FSMContext):
@@ -152,7 +158,7 @@ async def cmd_invite(message: types.Message, state: FSMContext):
                 )
                 await message.answer(invite_message)
         else:
-            await message.answer("Тебя нет в базе данных.")
+            await message.answer("Вас нет в базе данных.")
 
 async def process_invite_nickname(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
@@ -220,6 +226,23 @@ async def cmd_buy(message: types.Message):
 
     async with async_session() as session:
         current_date = datetime.now().date()
+
+        # Проверка, купил ли пользователь уже билет
+        ticket_check_result = await session.execute(
+            select(Ticket)
+            .where(Ticket.user_id == telegram_nick)
+        )
+        existing_ticket = ticket_check_result.scalars().first()
+
+        if existing_ticket:
+            await message.answer(
+                "Вы уже купили билет.\n"
+                "Один пользователь может купить только один билет.\n"
+                "Используйте команду 'Обо мне', чтобы получить информацию о вашем билете."
+            )
+            return  # Завершаем выполнение функции
+
+        # Поиск ближайшего события
         result = await session.execute(
             select(Event)
             .where(Event.event_date >= current_date)
@@ -232,9 +255,9 @@ async def cmd_buy(message: types.Message):
             time_until_event = event_datetime - datetime.now()
 
             if time_until_event > timedelta(weeks=4):
-                await message.answer("Ближайших ивентов нет.")
+                await message.answer("📅 Ближайших ивентов нет.")
             else:
-                # Поиск первого доступного кода в таблице Ticket
+                # Поиск первого доступного кода в таблице Ticket, который не назначен никому
                 code_result = await session.execute(
                     select(Ticket)
                     .where(Ticket.user_id == None)  # Проверка, что код не назначен никому
@@ -243,13 +266,26 @@ async def cmd_buy(message: types.Message):
                 available_ticket = code_result.scalars().first()
 
                 if available_ticket:
-                    available_ticket.user_id = message.from_user.id  # Назначаем билет пользователю
+                    available_ticket.user_id = telegram_nick  # Назначаем ник пользователя
+                    # available_ticket.event_id = event.id  # Привязываем к текущему событию
                     await session.commit()
-                    await message.answer(f"Вы купили билет на событие {event.event_name}!")
+                    # Формируем ответное сообщение
+                    ticket_link = event.tickets_sale_link
+                    await message.answer(
+                        f"Вы покупаете билет на событие: {event.event_name}!\n\n"
+                        f"Чтобы продолжить покупку билета, перейдите по следующей ссылке:\n"
+                        f"{ticket_link}\n\n"
+                        f"Введите на сайте код: "
+                    )
+                    await message.answer({available_ticket.code})
+                    await message.answer("И оплатите билет.\n Напоминаем вам, что по одному коду можно купить только один билет!")
                 else:
-                    await message.answer("Извините, коды на билеты закончились.")
+                    await message.answer("Извините, билеты закончились.")
         else:
-            await message.answer("Извините, ивенты закончились.")
+            await message.answer(
+                "Доступных ивентов пока нет.\n"
+                "Ждите новости о ближайших релизах в нашем телеграм-канале: @oz4r3n13."
+            )
 
 async def cmd_ban(message: types.Message):
     telegram_nick = message.from_user.username
@@ -277,16 +313,49 @@ async def cmd_ban(message: types.Message):
             else:
                 await message.answer("Пользователь не найден.")
         else:
-            await message.answer("У вас недостаточно прав для выполнения этой команды.")
+            await message.answer("❌ У вас недостаточно прав для выполнения этой команды. ❌ ")
 
+# Обработчик команды /unban
+async def cmd_unban(message: types.Message):
+    telegram_nick = message.from_user.username
+
+    # Проверяем, является ли пользователь администратором
+    async with async_session() as session:
+        admin_result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
+        admin_user = admin_result.scalars().first()
+
+        if admin_user and admin_user.level == 777:  # Проверяем уровень администратора
+            parts = message.text.split()
+            if len(parts) < 2:
+                await message.answer("Пожалуйста, укажите никнейм пользователя, которого хотите разбанить.")
+                return
+
+            user_to_unban_nick = parts[1].lstrip('@')
+
+            user_result = await session.execute(select(User).where(User.telegram_nick == user_to_unban_nick))
+            user_to_unban = user_result.scalars().first()
+
+            if user_to_unban:
+                user_to_unban.level = 1  # Снимаем бан, устанавливая уровень на 1
+                await session.commit()
+                await message.answer(f"Пользователь @{user_to_unban_nick} был разбанен.")
+            else:
+                await message.answer("Пользователь не найден.")
+        else:
+            await message.answer("❌ У вас недостаточно прав для выполнения этой команды. ❌")
+
+
+# Обработчик команды /me
 async def cmd_me(message: types.Message):
     telegram_nick = message.from_user.username
 
     async with async_session() as session:
+        # Проверка наличия пользователя в базе данных
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
         user = result.scalars().first()
 
         if user:
+            # Формируем основную информацию о пользователе
             user_info = (
                 f"ФИО: {user.full_name or 'Не указано'}\n"
                 f"Уровень: {user.level}\n"
@@ -295,6 +364,32 @@ async def cmd_me(message: types.Message):
                 f"Доступные приглашения: {user.available_invitations or 'Нет'}\n"
                 f"Пригласивший: @{user.inviter or 'Нет'}"
             )
+
+            # Проверка, купил ли пользователь билет
+            ticket_result = await session.execute(
+                select(Ticket)
+                .where(Ticket.user_id == telegram_nick)
+            )
+            ticket = ticket_result.scalars().first()
+
+            if ticket:
+                # Получаем информацию о событии
+                event_result = await session.execute(
+                    select(Event)
+                    .where(Event.id == ticket.event_id)
+                )
+                event = event_result.scalars().first()
+
+                if event:
+                    user_info += (
+                        f"\n\nВы купили билет на событие: {event.event_name}\n"
+                        f"Код билета: {ticket.code}\n"
+                        f"Дата и время: {event.event_date} {event.event_time}\n"
+                        f"Ссылка на строницу события в Qtikets где ты покупал билет: {event.tickets_sale_link}"
+                    )
+            else:
+                user_info += "\n\nКак вы купите билет здесь появится информаиця о событии."
+
             await message.answer(user_info)
         else:
             await message.answer("Тебя нет в базе данных.")
@@ -302,21 +397,57 @@ async def cmd_me(message: types.Message):
 
 async def cmd_help(message: types.Message):
     help_text = (
-        "Тутутутутутут"
+        "У вас появился вопрос на который не может ответить бот?\n"
+        "Напиши нам на почту потдержки: 0z4r3n13supp0rt@gmail.com \n"
+        "Или в телеграмм аккаунт потдержки: @oz4r3n13support"
     )
     await message.answer(help_text)
 
 
+
+async def handle_invite_button(message: types.Message, state: FSMContext):
+    if message.text == "Пригласить":
+        await cmd_invite(message, state)  # Передаем state
+
+# Обработчик нажатия на кнопку "Купить билет"
+async def handle_buy_button(message: types.Message):
+    if message.text == "Купить билет":
+        await cmd_buy(message)
+
+# Обработчик нажатия на кнопку "Помощь"
+async def handle_help_button(message: types.Message):
+    if message.text == "Помощь":
+        await cmd_help(message)
+
+# Обработчик нажатия на кнопку "Обо мне"
+async def handle_me_button(message: types.Message):
+    if message.text == "Обо мне":
+        await cmd_me(message)
+
+# Обработчик нажатия на кнопку "Информация об уровнях"
+async def handle_level_info_button(message: types.Message):
+    if message.text == "Информация об уровнях":
+        await cmd_level(message)
+
+
+# Регистрация обработчиков
 def register_handlers(dp: Dispatcher):
     dp.message.register(cmd_start, Command(commands=["start"]))
     dp.message.register(cmd_invite, Command(commands=["invite"]))
     dp.message.register(cmd_me, Command(commands=["me"]))
     dp.message.register(cmd_buy, Command(commands=["buy"]))
     dp.message.register(cmd_ban, Command(commands=["ban"]))
+    dp.message.register(cmd_unban, Command(commands=["unban"]))
     dp.message.register(cmd_level, Command(commands=["level"]))
     dp.message.register(cmd_help, Command(commands=["help"]))
     
-    
+    # Регистрация обработчиков кнопок
+    dp.message.register(handle_invite_button, F.text == "Пригласить")
+    dp.message.register(handle_buy_button, F.text == "Купить билет")
+    dp.message.register(handle_help_button, F.text == "Помощь")
+    dp.message.register(handle_me_button, F.text == "Обо мне")
+    dp.message.register(handle_level_info_button, F.text == "Об уровнях")
+
     
 
 async def main():
