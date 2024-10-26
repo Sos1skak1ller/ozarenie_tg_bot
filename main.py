@@ -19,7 +19,8 @@ from sqlalchemy.future import select
 
 # Настройки
 API_TOKEN = '7050222486:AAHW-e9JU_43Cc3BWwbCewZL3UBFR-MqogQ'
-DATABASE_URL = "postgresql+asyncpg://postgres:pass@localhost:5432/ozarenie_test_db"
+DATABASE_URL = "postgresql+asyncpg://myuser:mypassword@localhost:5432/mydatabase"
+
 
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
