@@ -19,8 +19,8 @@ from sqlalchemy.future import select
 
 # Настройки
 API_TOKEN = '7050222486:AAHW-e9JU_43Cc3BWwbCewZL3UBFR-MqogQ'
-DATABASE_URL = "postgresql+asyncpg://myuser:mypassword@localhost:5432/mydatabase"
-# DATABASE_URL = "postgresql+asyncpg://postgres:pass@localhost:5432/ozarenie_test_db"
+# DATABASE_URL = "postgresql+asyncpg://myuser:mypassword@localhost:5432/mydatabase"
+DATABASE_URL = "postgresql+asyncpg://postgres:pass@localhost:5432/ozarenie_test_db"
 
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
@@ -361,6 +361,7 @@ async def cmd_me(message: types.Message):
                 f"Доступные приглашения: {user.available_invitations or 'Нет'}\n"
                 f"Пригласивший: @{user.inviter or 'Нет'}"
             )
+            await message.answer(user_info)
 
             # Проверка, купил ли пользователь билет
             ticket_result = await session.execute(
@@ -378,16 +379,16 @@ async def cmd_me(message: types.Message):
                 event = event_result.scalars().first()
 
                 if event:
-                    user_info += (
+                    tiket_info = (
                         f"\n\nВы купили билет на событие: {event.event_name}\n"
                         f"Код билета: {ticket.code}\n"
                         f"Дата и время: {event.event_date} {event.event_time}\n"
                         f"Ссылка на строницу события в Qtikets где ты покупал билет: {event.tickets_sale_link}"
                     )
+                    await message.answer(tiket_info)
             else:
-                user_info += "\n\nКак вы купите билет здесь появится информаиця о событии."
-
-            await message.answer(user_info)
+                tiket_info = "\n\nКак вы купите билет здесь появится информаиця о событии."
+                await message.answer(tiket_info)
         else:
             await message.answer("Тебя нет в базе данных.")
 
