@@ -2,14 +2,14 @@ import asyncio
 import re
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.future import select
-from sqlalchemy import Column, Integer, String, Date, Time
+from sqlalchemy import Column, Integer, String, Date, Time, Text
 from keyboards import get_main_keyboard
 from aiogram import F
 from aiogram import types
@@ -38,15 +38,11 @@ BAN_LEVEL = -1
 ADMIN_LEVEL = 777
 
 LEVEL_MESSAGES = {
-    0: "Привет, новичок!",
-    1: "Привет, пользователь 1 уровня!",
-    2: "Привет, пользователь 2 уровня!",
-    3: "Привет, пользователь 3 уровня!"
+    0: "Добро пожаловать в 0z4r3n13, новичок!",
+    1: "Добро пожаловать в 0z4r3n13, пользователь 1 уровня!",
+    2: "Добро пожаловать в 0z4r3n13, пользователь 2 уровня!",
+    3: "Добро пожаловать в 0z4r3n13, пользователь 3 уровня!"
 }
-
-# Проверка валидности ФИО
-def is_valid_full_name(full_name: str) -> bool:
-    return bool(re.match(r'^[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+$', full_name))
 
 class FullNameState(StatesGroup):
     waiting_for_full_name = State()
@@ -54,7 +50,6 @@ class FullNameState(StatesGroup):
 # Определение состояний для FSM
 class InviteState(StatesGroup):
     waiting_for_invite_nickname = State()
-
 
 # Определение модели пользователя
 class User(Base):
@@ -86,6 +81,16 @@ class Ticket(Base):
     event_id = Column(Integer, nullable=False)
     code = Column(String, nullable=False, unique=False)
 
+class InviteState(StatesGroup):
+    waiting_for_invite_nickname = State()
+
+class FullNameState(StatesGroup):
+    waiting_for_full_name = State()
+
+# Проверка валидности ФИО
+def is_valid_full_name(full_name: str) -> bool:
+    return bool(re.match(r'^[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+$', full_name))
+
 # Проверка, забанен ли пользователь
 async def is_user_banned(telegram_nick):
     async with async_session() as session:
@@ -94,10 +99,10 @@ async def is_user_banned(telegram_nick):
         return user.level == BAN_LEVEL if user else False
 
 # Обработчик команды /start
-
+@dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
-
+    
     if await is_user_banned(telegram_nick):
         return  # Игнорируем забаненных пользователей
 
@@ -105,25 +110,45 @@ async def cmd_start(message: types.Message, state: FSMContext):
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
         user = result.scalars().first()
 
-        keyboard = get_main_keyboard()  # Получаем клавиатуру
+        keyboard = get_main_keyboard()
 
         if user:
-            await message.answer("Добро пожаловать в 0z4r3n13!", reply_markup=keyboard)
-
-            if user.level == ADMIN_LEVEL:
-                await message.answer("Это админка прошу тебя использовать скрытый функционал с умом", reply_markup=keyboard)
-
             if not user.full_name:
-                await message.answer("Пожалуйста, введите ваше ФИО (например: Иванов Иван Иванович).", reply_markup=keyboard)
+                await message.answer("Пожалуйста, введите ваше ФИО (например: Иванов Иван Иванович).")
                 await state.set_state(FullNameState.waiting_for_full_name)
                 await state.update_data(user_id=user.id)
+                return  # Выход из функции после запроса ФИО
+
+            # Если у пользователя есть полное имя, проверяем уровень
+            if user.level == ADMIN_LEVEL:
+                await message.answer("Это админка, прошу тебя использовать скрытый функционал с умом.", reply_markup=keyboard)
             else:
-                level_message = LEVEL_MESSAGES.get(user.level, "Привет!")
+                level_message = LEVEL_MESSAGES.get(user.level)
                 await message.answer(level_message, reply_markup=keyboard)
         else:
-            await message.answer("Вас нет в базе данных.\n Если вы были гостем нашего превого мероприятия «Anniversary 20th», напиши нам \n\n 0z4r3n13supp0rt@gmail.com \n\n @oz4r3n13support")
+            await message.answer("Вас нет в базе данных.\nЕсли вы были гостем нашего превого мероприятия «Anniversary 20th», напиши нам: \n\n 0z4r3n13supp0rt@gmail.com \n\n @oz4r3n13support")
 
+@dp.message(FullNameState.waiting_for_full_name)
+async def process_full_name(message: types.Message, state: FSMContext):
+    full_name = message.text.strip()
 
+    data = await state.get_data()
+    user_id = data['user_id']
+    keyboard = get_main_keyboard()
+
+    async with async_session() as session:
+        user = await session.get(User, user_id)  # Получаем пользователя по ID
+        if user:
+            user.full_name = full_name  # Обновляем ФИО
+            await session.commit()  # Сохраняем изменения
+            level_message = LEVEL_MESSAGES.get(user.level)
+            await message.answer(f"Ваше ФИО успешно сохранено!\n{level_message}", reply_markup=keyboard)
+        else:
+            await message.answer("Пользователь не найден.")
+    
+    await state.clear()  # Убираем состояние после успешного ввода
+
+#обработчик команды /invite
 async def cmd_invite(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
 
@@ -143,8 +168,9 @@ async def cmd_invite(message: types.Message, state: FSMContext):
                     f"Вам доступно {user.available_invitations} приглашение(ий)\n"
                     "Введите никнейм вашего друга в телеграме"
                 )
-                await message.answer(invite_message)
+                # await message.answer(invite_message)
                 await state.set_state(InviteState.waiting_for_invite_nickname)
+                await message.answer(invite_message)
                 await state.update_data(inviter=telegram_nick)
             else:
                 invite_message = (
@@ -184,7 +210,7 @@ async def process_invite_nickname(message: types.Message, state: FSMContext):
 
                 new_user = User(
                     telegram_nick=invitee_nick,
-                    full_name="",
+                    full_name=NULL,
                     level=0,
                     visit_count=0,
                     invitation_count=0,
@@ -200,7 +226,7 @@ async def process_invite_nickname(message: types.Message, state: FSMContext):
 
     await state.clear()
 
-
+# Обработчик команды /level
 async def cmd_level(message: types.Message):
     answer = (
         "Существует три уровня участника. Уровень повышается засчет посещения наших мероприятий. "
@@ -212,7 +238,6 @@ async def cmd_level(message: types.Message):
         "После этого они также будут внесены в список наших участников."
     )
     await message.answer(answer)
-
 
 # Обработчик команды /buy
 async def cmd_buy(message: types.Message):
@@ -284,6 +309,7 @@ async def cmd_buy(message: types.Message):
                 "Ждите новости о ближайших релизах в нашем телеграм-канале: @oz4r3n13."
             )
 
+# Обработчик команды /ban
 async def cmd_ban(message: types.Message):
     telegram_nick = message.from_user.username
 
@@ -341,7 +367,6 @@ async def cmd_unban(message: types.Message):
         else:
             await message.answer("❌ У вас недостаточно прав для выполнения этой команды. ❌")
 
-
 # Обработчик команды /me
 async def cmd_me(message: types.Message):
     telegram_nick = message.from_user.username
@@ -361,7 +386,6 @@ async def cmd_me(message: types.Message):
                 f"Доступные приглашения: {user.available_invitations or 'Нет'}\n"
                 f"Пригласивший: @{user.inviter or 'Нет'}"
             )
-            await message.answer(user_info)
 
             # Проверка, купил ли пользователь билет
             ticket_result = await session.execute(
@@ -389,10 +413,12 @@ async def cmd_me(message: types.Message):
             else:
                 tiket_info = "\n\nКак вы купите билет здесь появится информаиця о событии."
                 await message.answer(tiket_info)
+        
+            await message.answer(user_info)
         else:
             await message.answer("Тебя нет в базе данных.")
 
-
+# Обработчик команды /help
 async def cmd_help(message: types.Message):
     help_text = (
         "У вас появился вопрос на который не может ответить бот?\n"
@@ -401,10 +427,9 @@ async def cmd_help(message: types.Message):
     )
     await message.answer(help_text)
 
-
-
+# Обработчик нажатия на кнопку "Пригласить"
 async def handle_invite_button(message: types.Message, state: FSMContext):
-    print(f"Кнопка нажата: {message.text} от {message.from_user.username}")
+    await message.answer(f"Кнопка нажата: {message.text} от {message.from_user.username}")
     if message.text == "Пригласить":
         await cmd_invite(message, state)  # Передаем state
 
@@ -429,25 +454,23 @@ async def handle_level_info_button(message: types.Message):
         await cmd_level(message)
 
 
-# Регистрация обработчиков
 def register_handlers(dp: Dispatcher):
     dp.message.register(cmd_start, Command(commands=["start"]))
     dp.message.register(cmd_invite, Command(commands=["invite"]))
+    dp.message.register(process_invite_nickname, StateFilter(InviteState.waiting_for_invite_nickname))
     dp.message.register(cmd_me, Command(commands=["me"]))
     dp.message.register(cmd_buy, Command(commands=["buy"]))
     dp.message.register(cmd_ban, Command(commands=["ban"]))
     dp.message.register(cmd_unban, Command(commands=["unban"]))
     dp.message.register(cmd_level, Command(commands=["level"]))
     dp.message.register(cmd_help, Command(commands=["help"]))
-    
+
     # Регистрация обработчиков кнопок
     dp.message.register(handle_invite_button, F.text == "Пригласить")
     dp.message.register(handle_buy_button, F.text == "Купить билет")
     dp.message.register(handle_help_button, F.text == "Помощь")
     dp.message.register(handle_me_button, F.text == "Обо мне")
     dp.message.register(handle_level_info_button, F.text == "Об уровнях")
-
-    
 
 async def main():
     register_handlers(dp)
