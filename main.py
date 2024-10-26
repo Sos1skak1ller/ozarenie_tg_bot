@@ -274,7 +274,7 @@ async def cmd_buy(message: types.Message):
                         f"{ticket_link}\n\n"
                         f"Введите на сайте код: "
                     )
-                    await message.answer(String({available_ticket.code}))
+                    await message.answer(available_ticket.code)
                     await message.answer("И оплатите билет.\n Напоминаем вам, что по одному коду можно купить только один билет!")
                 else:
                     await message.answer("Извините, билеты закончились.")
