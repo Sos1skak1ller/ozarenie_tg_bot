@@ -87,6 +87,12 @@ class InviteState(StatesGroup):
 class FullNameState(StatesGroup):
     waiting_for_full_name = State()
 
+class BanState(StatesGroup):
+    waiting_for_ban_name = State()
+
+class UnBanState(StatesGroup):
+    waiting_for_unban_name = State()
+
 # Проверка валидности ФИО
 def is_valid_full_name(full_name: str) -> bool:
     return bool(re.match(r'^[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+\s[A-Za-zА-Яа-яёЁ]+$', full_name))
@@ -97,6 +103,17 @@ async def is_user_banned(telegram_nick):
         result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
         user = result.scalars().first()
         return user.level == BAN_LEVEL if user else False
+    
+# Метод для получения списка приглашенных пользователей
+async def get_invited_users(telegram_nick: str, session) -> str:
+    result = await session.execute(select(User).where(User.inviter == telegram_nick))
+    invited_users = result.scalars().all()
+
+    if invited_users:
+        return "\n".join(user.telegram_nick for user in invited_users)
+    else:
+        return "Нет приглашенных пользователей."
+    
 
 # Обработчик команды /start
 @dp.message(Command("start"))
@@ -121,7 +138,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
             # Если у пользователя есть полное имя, проверяем уровень
             if user.level == ADMIN_LEVEL:
-                await message.answer("Это админка, прошу тебя использовать скрытый функционал с умом.", reply_markup=keyboard)
+                await message.answer("Это админка, прошу тебя использовать скрытый функционал с умом. \n\n Спсок закрытых функций:\n /ban - бан пользователя,\n /unban - разбан пользователя,\n /stop - Выключение бота ТОЛЬКО ЭКСТРЕННЫЕ СЛУЧАИ!!! \n ВОЗМОЖНА ПОТЕРЯ НЕКОТОРЫХ ДАННЫХ ДЛЯ БАЗЫ ДАННЫХ!!! \n\n CЁГА ПИШИ МИХАИЛУ )))", reply_markup=keyboard)
             else:
                 level_message = LEVEL_MESSAGES.get(user.level)
                 await message.answer(level_message, reply_markup=keyboard)
@@ -148,7 +165,7 @@ async def process_full_name(message: types.Message, state: FSMContext):
     
     await state.clear()  # Убираем состояние после успешного ввода
 
-#обработчик команды /invite
+# Обработчик команды /invite
 async def cmd_invite(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
 
@@ -161,14 +178,16 @@ async def cmd_invite(message: types.Message, state: FSMContext):
 
         if user:
             if user.available_invitations and user.available_invitations > 0:
+                invited_users = await get_invited_users(telegram_nick, session)
+
                 invite_message = (
                     f"Вы посетили {user.visit_count} наше мероприятие.\n"
                     f"Ваш уровень: {user.level}\n"
                     f"Вы уже пригласили: {user.invitation_count}\n"
                     f"Вам доступно {user.available_invitations} приглашение(ий)\n"
-                    "Введите никнейм вашего друга в телеграме"
+                    "Вы пригласили:\n" + invited_users + 
+                    "\nВведите никнейм вашего друга в телеграме"
                 )
-                # await message.answer(invite_message)
                 await state.set_state(InviteState.waiting_for_invite_nickname)
                 await message.answer(invite_message)
                 await state.update_data(inviter=telegram_nick)
@@ -310,7 +329,7 @@ async def cmd_buy(message: types.Message):
             )
 
 # Обработчик команды /ban
-async def cmd_ban(message: types.Message):
+async def cmd_ban(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
 
     # Проверяем, является ли пользователь администратором
@@ -321,25 +340,37 @@ async def cmd_ban(message: types.Message):
         if admin_user and admin_user.level == 777:  # Проверяем уровень администратора
             parts = message.text.split()
             if len(parts) < 2:
+                # Если никнейм не указан, запрашиваем его
+                await state.set_state(BanState.waiting_for_ban_name) # Устанавливаем состояние ожидания никнейма
                 await message.answer("Пожалуйста, укажите никнейм пользователя, которого хотите забанить.")
                 return
 
             user_to_ban_nick = parts[1].lstrip('@')
-
-            user_result = await session.execute(select(User).where(User.telegram_nick == user_to_ban_nick))
-            user_to_ban = user_result.scalars().first()
-
-            if user_to_ban:
-                user_to_ban.level = -1  # Устанавливаем уровень -1 для забаненного
-                await session.commit()
-                await message.answer(f"Пользователь @{user_to_ban_nick} был забанен.")
-            else:
-                await message.answer("Пользователь не найден.")
+            await ban_user(user_to_ban_nick, message)
         else:
-            await message.answer("❌ У вас недостаточно прав для выполнения этой команды. ❌ ")
+            await message.answer("❌ У вас недостаточно прав для выполнения этой команды. ❌")
+
+# Обработчик для получения никнейма после запроса
+async def process_ban_username(message: types.Message, state: FSMContext):
+    user_to_ban_nick = message.text.lstrip('@')
+    await ban_user(user_to_ban_nick, message)
+    await state.clear()  # Завершаем состояние
+
+# Функция для выполнения бана
+async def ban_user(user_to_ban_nick, message):
+    async with async_session() as session:
+        user_result = await session.execute(select(User).where(User.telegram_nick == user_to_ban_nick))
+        user_to_ban = user_result.scalars().first()
+
+        if user_to_ban:
+            user_to_ban.level = -1  # Устанавливаем уровень -1 для забаненного
+            await session.commit()
+            await message.answer(f"Пользователь @{user_to_ban_nick} был забанен.")
+        else:
+            await message.answer("Пользователь не найден.")
 
 # Обработчик команды /unban
-async def cmd_unban(message: types.Message):
+async def cmd_unban(message: types.Message, state: FSMContext):
     telegram_nick = message.from_user.username
 
     # Проверяем, является ли пользователь администратором
@@ -350,20 +381,52 @@ async def cmd_unban(message: types.Message):
         if admin_user and admin_user.level == 777:  # Проверяем уровень администратора
             parts = message.text.split()
             if len(parts) < 2:
+                # Если никнейм не указан, запрашиваем его
                 await message.answer("Пожалуйста, укажите никнейм пользователя, которого хотите разбанить.")
+                await state.set_state(UnBanState.waiting_for_unban_name)  # Устанавливаем состояние ожидания никнейма
                 return
 
             user_to_unban_nick = parts[1].lstrip('@')
+            await unban_user(user_to_unban_nick, message)
+        else:
+            await message.answer("❌ У вас недостаточно прав для выполнения этой команды. ❌")
 
-            user_result = await session.execute(select(User).where(User.telegram_nick == user_to_unban_nick))
-            user_to_unban = user_result.scalars().first()
+# Обработчик для получения никнейма после запроса
+async def process_unban_username(message: types.Message, state: FSMContext):
+    user_to_unban_nick = message.text.lstrip('@')
+    await unban_user(user_to_unban_nick, message)
+    await state.clear()  # Завершаем состояние
 
-            if user_to_unban:
-                user_to_unban.level = 1  # Снимаем бан, устанавливая уровень на 1
-                await session.commit()
-                await message.answer(f"Пользователь @{user_to_unban_nick} был разбанен.")
-            else:
-                await message.answer("Пользователь не найден.")
+# Функция для выполнения разбана
+async def unban_user(user_to_unban_nick, message):
+    async with async_session() as session:
+        user_result = await session.execute(select(User).where(User.telegram_nick == user_to_unban_nick))
+        user_to_unban = user_result.scalars().first()
+
+        if user_to_unban:
+            user_to_unban.level = 1  # Снимаем бан, устанавливая уровень на 1
+            await session.commit()
+            await message.answer(f"Пользователь @{user_to_unban_nick} был разбанен.")
+        else:
+            await message.answer("Пользователь не найден.")
+
+# Обработчик команды /stop
+@dp.message(Command("stop"))
+async def cmd_stop(message: types.Message):
+    telegram_nick = message.from_user.username
+
+    # Проверяем, является ли пользователь администратором
+    async with async_session() as session:
+        admin_result = await session.execute(select(User).where(User.telegram_nick == telegram_nick))
+        admin_user = admin_result.scalars().first()
+
+        if admin_user and admin_user.level == ADMIN_LEVEL:  # Проверяем, что уровень администратора
+            await message.answer("Бот остановлен, что-бы его заново запустить пиши Михаилу ))")
+            # Остановка бота
+            await bot.session.close()  # Закрытие сессии бота
+            await dp.storage.close()  # Закрытие хранилища состояний
+            await dp.storage.wait_closed()
+            await asyncio.get_event_loop().stop()  # Остановка event loop
         else:
             await message.answer("❌ У вас недостаточно прав для выполнения этой команды. ❌")
 
@@ -429,7 +492,6 @@ async def cmd_help(message: types.Message):
 
 # Обработчик нажатия на кнопку "Пригласить"
 async def handle_invite_button(message: types.Message, state: FSMContext):
-    await message.answer(f"Кнопка нажата: {message.text} от {message.from_user.username}")
     if message.text == "Пригласить":
         await cmd_invite(message, state)  # Передаем state
 
@@ -461,7 +523,9 @@ def register_handlers(dp: Dispatcher):
     dp.message.register(cmd_me, Command(commands=["me"]))
     dp.message.register(cmd_buy, Command(commands=["buy"]))
     dp.message.register(cmd_ban, Command(commands=["ban"]))
+    dp.message.register(process_ban_username, StateFilter(BanState.waiting_for_ban_name))
     dp.message.register(cmd_unban, Command(commands=["unban"]))
+    dp.message.register(process_unban_username, StateFilter(UnBanState.waiting_for_unban_name))
     dp.message.register(cmd_level, Command(commands=["level"]))
     dp.message.register(cmd_help, Command(commands=["help"]))
 
