@@ -19,9 +19,9 @@ from sqlalchemy.future import select
 
 # Настройки
 API_TOKEN = '7050222486:AAHW-e9JU_43Cc3BWwbCewZL3UBFR-MqogQ'
-# DATABASE_URL = "postgresql+asyncpg://postgres:pass@localhost:5432/ozarenie_test_db"
+DATABASE_URL = "postgresql+asyncpg://postgres:pass@localhost:5432/ozarenie_test_db"
 # DATABASE_URL = "postgresql+asyncpg://myuser:mypassword@localhost:5432/ozarenie_db"
-DATABASE_URL = "postgresql+asyncpg://myuser:mypassword@localhost:5432/mydatabase"
+# DATABASE_URL = "postgresql+asyncpg://myuser:mypassword@localhost:5432/mydatabase"
 
 
 
@@ -232,7 +232,7 @@ async def process_invite_nickname(message: types.Message, state: FSMContext):
 
                 new_user = User(
                     telegram_nick=invitee_nick,
-                    full_name=NULL,
+                    full_name="",
                     level=0,
                     visit_count=0,
                     invitation_count=0,
